@@ -4,6 +4,9 @@
 #include <string.h>
 #include <strings.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <termios.h>
+#include <ctype.h>
 
 #define MAX_LINE 256
 
@@ -14,7 +17,7 @@ void print_help() {
 }
 
 int serial_open(const char* path) {
-    int fd = open(pathname, O_RDWR | O_NOCTTY);
+    int fd = open(path, O_RDWR | O_NOCTTY);
 
     if(fd<0) {
         perror("Could not open serial port");
@@ -27,7 +30,7 @@ int serial_open(const char* path) {
     settings.c_cflag |= (CLOCAL | CREAD);
     settings.c_iflag &= ~(IXOFF | IXANY);
 
-    settings.c_cc[VMIN] = 0; 
+    settings.c_cc[VMIN] = 3; 
     settings.c_cc[VTIME] = 5;
 
     cfsetispeed(&settings, B9600);
@@ -36,6 +39,30 @@ int serial_open(const char* path) {
     tcsetattr(fd, TCSANOW, &settings);
 
     return fd;
+}
+
+int is_command(const char* line) {
+    for(int i=0; line[i]; i++) {
+        if(isalpha(line[i]))
+            return 1;
+        if(line[i]==';')
+            return 0;
+    }
+    return 0;
+}
+
+void dump_str(const char* str) {
+    for(int i=0; str[i]; i++) {
+        if(isalpha(str[i]) || str[i]==' ' || str[i]=='.' || isdigit(str[i]))
+            putchar(str[i]);
+        else if(str[i]=='\r')
+            printf("\\r");
+        else if(str[i]=='\n')
+            printf("\\n");
+        else
+            printf("%d", str[i]);
+    }
+    putchar('\n');
 }
 
 void plotter_print(const char* gcode, const char* interface) {
@@ -58,14 +85,24 @@ void plotter_print(const char* gcode, const char* interface) {
 
     char line[MAX_LINE];
     while(fgets(line, MAX_LINE, fp)!=NULL) {
-        printf("%s", line);
-        write(sfd, line, strlen(line));
 
+        if(!is_command(line))
+            continue;
+
+        dump_str(line);
+
+        int n_write = write(sfd, line, strlen(line));
+
+        printf("%d: %s", n_write, line);
+
+        int n_read=0;
         bzero(line, MAX_LINE);
         do {
-            int n_read = read(sfd, line, MAX_LINE);
-            puts(line);
-        }while(strcmp(line, "OK\n"));
+            n_read = read(sfd, line, MAX_LINE);
+            printf("%d: %s", n_read, line);
+        }while(n_read==0);
+
+        bzero(line, MAX_LINE);
     }
 
 }
@@ -118,12 +155,17 @@ int main(int argc, const char* argv[]) {
         exit(-1);
     }
 
-    if(access(f_path, R_OK) || access(i_path, R_OK | W_OK)) {
-        fprintf(
-            stderr, "Could not read from %s: %s\n", argv[1], strerror(errno));
+    if(access(f_path, R_OK)) {
+        fprintf(stderr, "Could not access to %s: %s\n", f_path, strerror(errno));
+        exit(-1);
+    } 
+    
+    if(access(i_path, R_OK | W_OK)) {
+        fprintf(stderr, "Could not access to %s: %s\n", i_path, strerror(errno));
+        exit(-1);
     } 
 
-    plotter_print(f_path);
+    plotter_print(f_path, i_path);
     
     return 0;
 }
